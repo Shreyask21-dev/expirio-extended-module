@@ -112,3 +112,122 @@ export async function POST(request) {
   }
 }
 
+export async function PUT(request) {
+  try {
+    // 1. Check for Authorization header
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ message: 'Authorization token is missing or invalid' }, { status: 401 });
+    }
+
+    // 2. Extract and verify the token
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.user_id;
+
+    // 3. Parse the request body
+    const body = await request.json();
+    const { id, user_id, entity_name, service_name, payee_name, phone, email, amount, category } = body;
+
+    // 4. Validate required fields
+    if (!id) {
+      return NextResponse.json({ message: 'Payee ID is required' }, { status: 400 });
+    }
+
+    // 5. Resolve IDs based on names if not provided
+    const resolvedUserId = user_id || userId;
+    let entityId = null;
+    let serviceId = null;
+
+    if (entity_name) {
+      const [[entity]] = await db.execute('SELECT id FROM entities WHERE entity_name = ?', [entity_name]);
+      if (!entity) {
+        return NextResponse.json({ message: 'Invalid entity name' }, { status: 404 });
+      }
+      entityId = entity.id;
+    }
+
+    if (service_name) {
+      const [[service]] = await db.execute('SELECT id FROM services WHERE service_name = ?', [service_name]);
+      if (!service) {
+        return NextResponse.json({ message: 'Invalid service name' }, { status: 404 });
+      }
+      serviceId = service.id;
+    }
+
+    // 6. Update the payee record
+    await db.execute(
+      `UPDATE payees
+       SET user_id = ?, entity_id = ?, service_id = ?, payee_name = ?, phone = ?, email = ?, amount = ?, category = ?
+       WHERE id = ?`,
+      [
+        resolvedUserId,
+        entityId,
+        serviceId,
+        payee_name,
+        phone,
+        email,
+        amount,
+        category,
+        id,
+      ]
+    );
+
+    // 7. Respond with success message
+    return NextResponse.json({ message: 'Payee updated successfully' }, { status: 200 });
+
+  } catch (error) {
+    return NextResponse.json({ message: 'Something went wrong', error: error.message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request) {
+  try {
+    // 1. Check for Authorization header
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ message: 'Authorization token is missing or invalid' }, { status: 401 });
+    }
+
+    // 2. Extract and verify the token
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.user_id;
+
+    // 3. Parse request body
+    const body = await request.json();
+    const { id } = body;
+
+    // 4. Validate ID
+    if (!id) {
+      return NextResponse.json({ message: 'Payee ID is required' }, { status: 400 });
+    }
+
+    // 5. Verify payee belongs to the user
+    const [[payee]] = await db.execute(
+      'SELECT * FROM payees WHERE id = ? AND user_id = ?',
+      [id, userId]
+    );
+
+    if (!payee) {
+      return NextResponse.json({ message: 'Payee not found or not authorized to delete' }, { status: 404 });
+    }
+
+    // 6. Delete associated subscriptions
+    await db.execute('DELETE FROM subscriptions WHERE payee_id = ?', [id]);
+
+    // 7. Delete the payee record
+    await db.execute('DELETE FROM payees WHERE id = ? AND user_id = ?', [id, userId]);
+
+    // 8. Respond with success message
+    return NextResponse.json({
+      message: 'Payee and all associated subscriptions deleted successfully',
+    }, { status: 200 });
+
+  } catch (error) {
+    return NextResponse.json({
+      message: 'Something went wrong',
+      error: error.message,
+    }, { status: 500 });
+  }
+}
